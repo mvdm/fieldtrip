@@ -808,28 +808,54 @@ switch dataformat
   case 'neuralynx_sdma'
     dat = read_neuralynx_sdma(filename, begsample, endsample, chanindx);
     
-  case 'neuralynx_ncs'
+  case 'neuralynx_ncs' % MvdM edit 2014-06-20
     NRecords  = hdr.nSamples/512;
     begrecord = ceil(begsample/512);
     endrecord = ceil(endsample/512);
+    
     % read the records that contain the desired samples
     ncs = read_neuralynx_ncs(filename, begrecord, endrecord);
+    
     % cut out the desired samples
     begsample = begsample - (begrecord-1)*512;
     endsample = endsample - (begrecord-1)*512;
-    if istrue(timestamp)   
-      ncs.dat = cast(ncs.dat, class(ncs.TimeStamp));
-      d = ncs.TimeStamp(2:end)-ncs.TimeStamp(1:end-1);
-      medianTimestampPerBlock  = median(double(d)); % to avoid influence of the gaps
-      TimestampPerSample       = medianTimestampPerBlock/512; % divide by known block size
-      cls = class(ncs.TimeStamp);
-      % replace the data with the timestamp of each sample
-      for i=1:512
-        ncs.dat(i,:) = ncs.TimeStamp + cast((i-1)*TimestampPerSample,cls);
-      end
+    
+    d = ncs.TimeStamp(2:end)-ncs.TimeStamp(1:end-1);
+    medianTimestampPerBlock  = median(double(d)); % to avoid influence of the gaps
+    TimestampPerSample       = medianTimestampPerBlock/512; % divide by known block size
+    
+    nExpectedSamples = endsample-begsample; % based on 512 samples per block
+    nActualSamples = sum(ncs.NumValidSamp);
+    
+    if nExpectedSamples ~= nActualSamples % mismatch, need to loop over blocks to construct dat and ts
+        warning('nExpectedSamples (%d) does not match nActualSamples (%d), proceed with caution!',nExpectedSamples,nActualSamples);
     end
-    % this also reshape the data from 512 X records into a linear array
-    dat = ncs.dat(begsample:endsample);
+    
+    cls = class(ncs.TimeStamp); % maintain class of original timestamps (may differ between systems so cannot assume)
+    
+    dat_new = zeros(1,nActualSamples);
+    ts_new = cast(zeros(1,nActualSamples),cls);
+    
+    % loop over records to assemble data and timestamps, skipping invalid samples
+    idx = 1;
+    for iRec = 1:ncs.NRecords
+        
+        n_valid = ncs.NumValidSamp(iRec);
+        
+        dat_new(idx:idx+n_valid-1) = ncs.dat(1:n_valid,iRec)';
+        
+        ts_record = uint64(0:TimestampPerSample:(n_valid-1)*TimestampPerSample);
+        ts_new(idx:idx+ncs.NumValidSamp(iRec)-1) = cast(ts_record,cls) + ncs.TimeStamp(iRec);
+        
+        idx = idx+ncs.NumValidSamp(iRec);
+        
+    end
+    
+    if istrue(timestamp)
+        dat = ts_new;
+    else
+        dat = dat_new;
+    end
     
   case 'neuralynx_nse'
     % read all records
